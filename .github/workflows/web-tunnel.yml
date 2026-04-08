@@ -19,8 +19,7 @@ jobs:
             fluxbox \
             git \
             python3 \
-            nodejs \
-            npm
+            websockify
             
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb || sudo apt-get install -f -y
@@ -49,12 +48,16 @@ jobs:
           
           echo "=== VNC READY ==="
 
-      - name: Start noVNC and Tunnel
+      - name: Start noVNC with WebSocket proxy
         run: |
           cd /tmp/noVNC
-          nohup python3 -m http.server 6080 &
-          sleep 2
+          nohup websockify --web /tmp/noVNC 6080 localhost:5900 &
+          sleep 3
           
+          echo "=== noVNC READY on 6080 ==="
+
+      - name: Start Tunnel
+        run: |
           sleep 5
           cloudflared tunnel --url http://localhost:6080 --logfile tunnel.log &
           sleep 15
