@@ -2,6 +2,15 @@ name: web-tunnel
 
 on:
   workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: false
+        default: 'start'
+        type: choice
+        options:
+          - start
+          - stop
 
 jobs:
   browser-tunnel:
@@ -9,6 +18,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Get Worker URL and Handshake Token
+        run: |
+          echo "WORKER_URL=${{ vars.MY_WORKER_URL }}" >> $GITHUB_ENV
+          echo "HANDSHAKE_TOKEN=${{ vars.MY_WEB_HANDSHAKE_TOKEN }}" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: |
@@ -19,7 +33,8 @@ jobs:
             fluxbox \
             git \
             python3 \
-            websockify
+            websockify \
+            curl
             
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb || sudo apt-get install -f -y
@@ -29,6 +44,26 @@ jobs:
           cd /tmp
           git clone --depth 1 https://github.com/novnc/noVNC.git
           cp noVNC/vnc.html noVNC/index.html
+
+      - name: Get VNC Password from Worker
+        run: |
+          WORKER_URL="${{ vars.MY_WORKER_URL }}"
+          HANDSHAKE="${{ vars.MY_WEB_HANDSHAKE_TOKEN }}"
+          
+          # Get password from worker
+          RESPONSE=$(curl -s -X POST "$WORKER_URL/my-browser/get-password" \
+            -H "Authorization: Bearer $HANDSHAKE" \
+            -H "Content-Type: application/json")
+          
+          VNC_PASS=$(echo $RESPONSE | grep -o '"password":"[^"]*' | cut -d'"' -f4)
+          
+          if [ -z "$VNC_PASS" ]; then
+            echo "Failed to get password from worker"
+            exit 1
+          fi
+          
+          echo "VNC_PASS=$VNC_PASS" >> $GITHUB_ENV
+          echo "Got VNC password from worker"
 
       - name: Start VNC and Browser
         run: |
@@ -43,10 +78,12 @@ jobs:
           google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --new-window http://example.com &
           sleep 5
           
-          x11vnc -display :99 -localhost -forever -shared -bg -nopw
+          # Create VNC password file
+          echo "$VNC_PASS" | x11vnc -storepasswd -f > /tmp/vncpwd
+          x11vnc -display :99 -localhost -forever -shared -bg -rfbauth /tmp/vncpwd
           sleep 2
           
-          echo "=== VNC READY ==="
+          echo "=== VNC READY with password ==="
 
       - name: Start noVNC with WebSocket proxy
         run: |
@@ -56,13 +93,26 @@ jobs:
           
           echo "=== noVNC READY on 6080 ==="
 
-      - name: Start Tunnel
+      - name: Start Tunnel and Register
         run: |
-          sleep 5
+          WORKER_URL="${{ vars.MY_WORKER_URL }}"
+          HANDSHAKE="${{ vars.MY_WEB_HANDSHAKE_TOKEN }}"
+          
           cloudflared tunnel --url http://localhost:6080 --logfile tunnel.log &
           sleep 15
+          
           TUNNEL_URL=$(grep -o 'https://[^ ]*\.trycloudflare\.com' tunnel.log | head -1 || echo "")
-          echo "Tunnel_URL=$TUNNEL_URL" >> $GITHUB_OUTPUT
-          echo "=== READY ==="
           echo "Tunnel: $TUNNEL_URL"
+          
+          if [ -n "$TUNNEL_URL" ] && [ -n "$WORKER_URL" ]; then
+            curl -X POST "$WORKER_URL/my-browser/register" \
+              -H "Authorization: Bearer $HANDSHAKE" \
+              -H "Content-Type: application/json" \
+              -d "{\"tunnel_url\": \"$TUNNEL_URL\"}"
+            
+            echo "=== Registered to Worker ==="
+          fi
+          
+          echo "tunnel_url=$TUNNEL_URL" >> $GITHUB_OUTPUT
+          echo "=== READY ==="
           sleep 3600
