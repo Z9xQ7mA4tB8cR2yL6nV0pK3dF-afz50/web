@@ -10,64 +10,48 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install all dependencies in one go
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget gnupg curl xserver-xorg-video-dummy xvfb xfce4 xfce4-goodies x11vnc python3 python3-pip git
+          sudo apt-get install -y --no-install-recommends \
+            xvfb \
+            x11vnc \
+            fluxbox \
+            google-chrome-stable \
+            python3-websockify &
+          
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb &
+          
+          wait
+          sudo dpkg -i cloudflared-linux-amd64.deb || sudo apt-get install -f -y
 
-      - name: Install noVNC
-        run: |
-          cd /tmp
-          git clone https://github.com/novnc/noVNC.git
-          sudo cp -r noVNC /usr/share/
-          sudo cp noVNC/vnc.html /usr/share/novnc/index.html
-
-      - name: Install Chrome
-        run: |
-          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-          sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
-
-      - name: Install Cloudflare Tunnel
-        run: |
-          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared-linux-amd64.deb
-
-      - name: Start Desktop and Browser
+      - name: Start VNC and Browser
         run: |
           export DISPLAY=:99
           
           Xvfb :99 -screen 0 1920x1080x24 &
-          sleep 3
+          sleep 2
           
-          export DEBIAN_FRONTEND=noninteractive
-          startxfce4 &
+          fluxbox &
+          sleep 2
+          
+          google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --new-window http://example.com &
           sleep 5
           
-          google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --remote-debugging-port=9222 &
-          sleep 8
+          x11vnc -display :99 -localhost -forever -shared -bg -nopw
+          sleep 2
           
-          nohup x11vnc -display :99 -localhost -forever -shared -bg -nopw &
-          sleep 3
-          
-          echo "=== VNC READY on port 5900 ==="
-
-      - name: Start noVNC Proxy
-        run: |
-          cd /usr/share/novnc
-          nohup websockify --web=/usr/share/novnc 6080 localhost:5900 &
-          sleep 3
-          echo "=== noVNC READY on port 6080 ==="
+          echo "=== VNC READY ==="
 
       - name: Start Tunnel
         run: |
-          sleep 5
+          python3 -m websockify 6080 localhost:5900 &
+          sleep 3
+          
           cloudflared tunnel --url http://localhost:6080 --logfile tunnel.log &
           sleep 15
           TUNNEL_URL=$(grep -o 'https://[^ ]*\.trycloudflare\.com' tunnel.log | head -1 || echo "")
           echo "Tunnel_URL=$TUNNEL_URL" >> $GITHUB_OUTPUT
           echo "=== READY ==="
-          echo "Tunnel URL: $TUNNEL_URL"
-          echo "Open this URL in your browser"
+          echo "Tunnel: $TUNNEL_URL"
           sleep 3600
