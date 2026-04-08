@@ -72,7 +72,7 @@ jobs:
           sleep 3
           
           # Setup VNC Password and Server
-          echo "$VNC_PASS" | x11vnc -storepasswd -f /tmp/vncpwd
+          x11vnc -storepasswd "$VNC_PASS" /tmp/vncpwd
           x11vnc -display :99 -localhost -forever -shared -bg -rfbauth /tmp/vncpwd
           
           # Setup Websockify for noVNC
