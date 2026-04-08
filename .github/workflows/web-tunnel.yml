@@ -10,20 +10,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install all dependencies in one go
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             xvfb \
             x11vnc \
             fluxbox \
-            google-chrome-stable \
-            python3-websockify &
-          
-          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb &
-          
-          wait
+            git \
+            python3 \
+            nodejs \
+            npm
+            
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb || sudo apt-get install -f -y
+
+      - name: Setup noVNC
+        run: |
+          cd /tmp
+          git clone --depth 1 https://github.com/novnc/noVNC.git
+          cp noVNC/vnc.html noVNC/index.html
 
       - name: Start VNC and Browser
         run: |
@@ -43,11 +49,13 @@ jobs:
           
           echo "=== VNC READY ==="
 
-      - name: Start Tunnel
+      - name: Start noVNC and Tunnel
         run: |
-          python3 -m websockify 6080 localhost:5900 &
-          sleep 3
+          cd /tmp/noVNC
+          nohup python3 -m http.server 6080 &
+          sleep 2
           
+          sleep 5
           cloudflared tunnel --url http://localhost:6080 --logfile tunnel.log &
           sleep 15
           TUNNEL_URL=$(grep -o 'https://[^ ]*\.trycloudflare\.com' tunnel.log | head -1 || echo "")
