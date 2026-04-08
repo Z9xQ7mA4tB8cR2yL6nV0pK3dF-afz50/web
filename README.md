@@ -1,23 +1,23 @@
 # web
 
-my web project - Selenium Browser with Cloudflare Tunnel
+my web project - VNC Browser with Cloudflare Tunnel
 
 ## Workflow: web-tunnel
 
 GitHub Actions e `web-tunnel` workflow run korle:
-1. Ubuntu VM e Chrome browser + Selenium setup hobe
-2. Headless Chrome browser chalbe
-3. Cloudflare tunnel create hobe
-4. Sei tunnel browser ke point korbe
-5. Workflow choto thakbe (manual cancel na korle)
+1. Ubuntu VM e Xvfb + VNC Server setup hobe
+2. Full Chrome browser chalbe (headless na)
+3. noVNC Web interface available
+4. Cloudflare tunnel create hobe
+5. Tunnel URL visit korle full browser pabe
+6. Workflow running thakbe (manual cancel na korle)
 
-Run command:
+**Run:**
 ```bash
-# Workflow dispatch diye run korar jonnay
 gh workflow run web-tunnel
 ```
 
-View logs:
-```bash
-gh run watch $(gh run list --workflow web-tunnel --limit 1 --json id --jq '.[0].id')
-```
+**Tunnel URL logs e pabe, then:**
+1. URL open korle noVNC interface asbe
+2. "Connect" click korlei browser pabe
+3. Full interaction - tab open/close, click, type, search - sob kaj korbe
