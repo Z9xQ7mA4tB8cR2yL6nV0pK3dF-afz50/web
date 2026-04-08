@@ -4,115 +4,102 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Action to perform'
+        description: 'Action (start or stop)'
         required: false
         default: 'start'
-        type: choice
-        options:
-          - start
-          - stop
+
+concurrency:
+  group: browser-tunnel
+  cancel-in-progress: true
 
 jobs:
-  browser-tunnel:
+  browser-session:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Get Worker URL and Handshake Token
+      - name: Process Stop Action
+        if: github.event.inputs.action == 'stop'
         run: |
-          echo "WORKER_URL=${{ vars.MY_WORKER_URL }}" >> $GITHUB_ENV
-          echo "HANDSHAKE_TOKEN=${{ vars.MY_WEB_HANDSHAKE_TOKEN }}" >> $GITHUB_ENV
+          echo "Workflow instances have been successfully stopped via concurrency rules."
+          exit 0
 
       - name: Install dependencies
+        if: github.event.inputs.action != 'stop'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb \
-            x11vnc \
-            fluxbox \
-            git \
-            python3 \
-            websockify \
-            curl
-            
+          sudo apt-get install -y --no-install-recommends xvfb x11vnc fluxbox git websockify curl
+          
+          # Install Chrome
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb || true
+          
+          # Install Cloudflared
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb || sudo apt-get install -f -y
 
       - name: Setup noVNC
+        if: github.event.inputs.action != 'stop'
         run: |
-          cd /tmp
-          git clone --depth 1 https://github.com/novnc/noVNC.git
-          cp noVNC/vnc.html noVNC/index.html
+          git clone --depth 1 https://github.com/novnc/noVNC.git /tmp/noVNC
+          cp /tmp/noVNC/vnc.html /tmp/noVNC/index.html
 
-      - name: Get VNC Password from Worker
+      - name: Get Password from Worker & Start Browser
+        if: github.event.inputs.action != 'stop'
         run: |
           WORKER_URL="${{ vars.MY_WORKER_URL }}"
           HANDSHAKE="${{ vars.MY_WEB_HANDSHAKE_TOKEN }}"
           
-          # Get password from worker
+          # Secure Handshake to get Password
           RESPONSE=$(curl -s -X POST "$WORKER_URL/my-browser/get-password" \
             -H "Authorization: Bearer $HANDSHAKE" \
             -H "Content-Type: application/json")
           
-          VNC_PASS=$(echo $RESPONSE | grep -o '"password":"[^"]*' | cut -d'"' -f4)
+          VNC_PASS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('password', ''))")
           
           if [ -z "$VNC_PASS" ]; then
-            echo "Failed to get password from worker"
+            echo "Failed to retrieve VNC password from worker endpoint."
             exit 1
           fi
           
-          echo "VNC_PASS=$VNC_PASS" >> $GITHUB_ENV
-          echo "Got VNC password from worker"
-
-      - name: Start VNC and Browser
-        run: |
+          # Start Virtual Display and Window Manager
           export DISPLAY=:99
-          
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
-          
           fluxbox &
           sleep 2
           
-          google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --new-window http://example.com &
-          sleep 5
-          
-          # Create VNC password file
-          echo "$VNC_PASS" | x11vnc -storepasswd -f > /tmp/vncpwd
-          x11vnc -display :99 -localhost -forever -shared -bg -rfbauth /tmp/vncpwd
-          sleep 2
-          
-          echo "=== VNC READY with password ==="
-
-      - name: Start noVNC with WebSocket proxy
-        run: |
-          cd /tmp/noVNC
-          nohup websockify --web /tmp/noVNC 6080 localhost:5900 &
+          # Start Chrome Background
+          google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --new-window http://google.com &
           sleep 3
           
-          echo "=== noVNC READY on 6080 ==="
+          # Setup VNC Password and Server
+          x11vnc -storepasswd "$VNC_PASS" /tmp/vncpwd
+          x11vnc -display :99 -localhost -forever -shared -bg -rfbauth /tmp/vncpwd
+          
+          # Setup Websockify for noVNC
+          nohup websockify --web /tmp/noVNC 6080 localhost:5900 &
+          sleep 2
 
-      - name: Start Tunnel and Register
+      - name: Start Cloudflare Tunnel and Register
+        if: github.event.inputs.action != 'stop'
         run: |
           WORKER_URL="${{ vars.MY_WORKER_URL }}"
           HANDSHAKE="${{ vars.MY_WEB_HANDSHAKE_TOKEN }}"
           
-          cloudflared tunnel --url http://localhost:6080 --logfile tunnel.log &
-          sleep 15
+          cloudflared tunnel --url http://localhost:6080 --logfile /tmp/tunnel.log &
+          sleep 12
           
-          TUNNEL_URL=$(grep -o 'https://[^ ]*\.trycloudflare\.com' tunnel.log | head -1 || echo "")
-          echo "Tunnel: $TUNNEL_URL"
+          TUNNEL_URL=$(grep -o 'https://[^ ]*\.trycloudflare\.com' /tmp/tunnel.log | head -1)
+          echo "Tunnel started at: $TUNNEL_URL"
           
-          if [ -n "$TUNNEL_URL" ] && [ -n "$WORKER_URL" ]; then
-            curl -X POST "$WORKER_URL/my-browser/register" \
+          if [ -n "$TUNNEL_URL" ]; then
+            curl -s -X POST "$WORKER_URL/my-browser/register" \
               -H "Authorization: Bearer $HANDSHAKE" \
               -H "Content-Type: application/json" \
               -d "{\"tunnel_url\": \"$TUNNEL_URL\"}"
-            
-            echo "=== Registered to Worker ==="
+            echo "Registered tunnel seamlessly."
+          else
+            echo "WARNING: Cloudflare Tunnel failed."
           fi
           
-          echo "tunnel_url=$TUNNEL_URL" >> $GITHUB_OUTPUT
-          echo "=== READY ==="
-          sleep 3600
+          # Keep VM running for 6 hours (Max GitHub Action runtime limit)
+          sleep 21600
